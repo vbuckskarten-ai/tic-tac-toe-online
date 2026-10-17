@@ -242,24 +242,16 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 
   <script>
-    // SCHRITT 2: Hier deine Firebase-Daten eintragen!
-    
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyAnm83n791L4QLyS5_p26-zINpTeE2QQrk",
-  authDomain: "tictactoce-online.firebaseapp.com",
-  databaseURL: "https://tictactoce-online-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "tictactoce-online",
-  storageBucket: "tictactoce-online.firebasestorage.app",
-  messagingSenderId: "1012703491718",
-  appId: "1:1012703491718:web:5f8b2b7c0eeeb18492c307",
-  measurementId: "G-GFWKNER7EV"
-};
-
-
-    const configReady =
-      firebaseConfig.apiKey !== "DEIN_API_KEY" &&
-      firebaseConfig.databaseURL !== "DEINE_DATABASE_URL";
+    const firebaseConfig = {
+      apiKey: "AIzaSyAnm83n791L4QLyS5_p26-zINpTeE2QQrk",
+      authDomain: "tictactoce-online.firebaseapp.com",
+      databaseURL: "https://tictactoce-online-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "tictactoce-online",
+      storageBucket: "tictactoce-online.firebasestorage.app",
+      messagingSenderId: "1012703491718",
+      appId: "1:1012703491718:web:5f8b2b7c0eeeb18492c307",
+      measurementId: "G-GFWKNER7EV"
+    };
 
     const $ = id => document.getElementById(id);
 
@@ -320,13 +312,6 @@ const firebaseConfig = {
     }
 
     async function start() {
-      if (!configReady) {
-        setMessage("Bitte zuerst deine Firebase-Konfiguration im Code eintragen.");
-        $("createBtn").disabled = true;
-        $("joinBtn").disabled = true;
-        return;
-      }
-
       try {
         firebase.initializeApp(firebaseConfig);
         db = firebase.database();
@@ -353,28 +338,23 @@ const firebaseConfig = {
       $("createBtn").disabled = true;
 
       try {
-        let code, roomRef, result;
+        let code, roomRef, snapshot;
         let found = false;
 
         for (let i = 0; i < 5; i++) {
           code = randomCode();
           roomRef = db.ref("games/" + code);
-
-          result = await roomRef.transaction(old => {
-            if (old === null) {
-              return {
-                x: user.uid,
-                o: "",
-                board: ".........",
-                turn: "X",
-                status: "waiting",
-                createdAt: Date.now()
-              };
-            }
-            return;
-          }, undefined, false);
-
-          if (result.committed) {
+          
+          snapshot = await roomRef.once("value");
+          if (!snapshot.exists()) {
+            await roomRef.set({
+              x: user.uid,
+              o: "",
+              board: ".........",
+              turn: "X",
+              status: "waiting",
+              createdAt: Date.now()
+            });
             found = true;
             break;
           }
@@ -407,33 +387,35 @@ const firebaseConfig = {
 
       try {
         const roomRef = db.ref("games/" + code);
+        const snapshot = await roomRef.once("value");
 
-        const result = await roomRef.transaction(game => {
-          if (!game) return;
-
-          if (game.x === user.uid) return game;
-          if (game.o === user.uid) return game;
-
-          if (!game.o && game.x !== user.uid) {
-            game.o = user.uid;
-            game.status = "playing";
-            return game;
-          }
-
-          return;
-        }, undefined, false);
-
-        if (!result.committed) {
-          throw new Error("Spiel nicht gefunden oder bereits voll.");
+        if (!snapshot.exists()) {
+          throw new Error("Spiel existiert nicht.");
         }
 
-        const game = result.snapshot.val();
+        const game = snapshot.val();
 
-        if (game.x === user.uid) myRole = "X";
-        else if (game.o === user.uid) myRole = "O";
-        else throw new Error("Du konntest diesem Spiel nicht beitreten.");
+        if (game.x === user.uid) {
+          myRole = "X";
+          openRoom(code);
+          return;
+        }
+        if (game.o === user.uid) {
+          myRole = "O";
+          openRoom(code);
+          return;
+        }
 
-        openRoom(code);
+        if (!game.o) {
+          await roomRef.update({
+            o: user.uid,
+            status: "playing"
+          });
+          myRole = "O";
+          openRoom(code);
+        } else {
+          throw new Error("Dieses Spiel ist bereits voll.");
+        }
       } catch (error) {
         console.error(error);
         setMessage(error.message || "Beitritt fehlgeschlagen.");
@@ -533,74 +515,63 @@ const firebaseConfig = {
     async function playMove(index) {
       if (!currentRoom || !user || busy) return;
       busy = true;
-      render();
 
       try {
         const roomRef = db.ref("games/" + currentRoom);
+        const snapshot = await roomRef.once("value");
+        const g = snapshot.val();
 
-        const result = await roomRef.transaction(g => {
-          if (!g || g.status !== "playing") return;
-          if (g.turn !== myRole) return;
-          if (g[myRole.toLowerCase()] !== user.uid) return;
+        if (!g || g.status !== "playing" || g.turn !== myRole) return;
 
-          const board = (g.board || ".........").split("");
-          if (board[index] !== ".") return;
-          if (checkWinner(board)) return;
+        const board = (g.board || ".........").split("");
+        if (board[index] !== ".") return;
 
-          board[index] = myRole;
-          g.board = board.join("");
+        board[index] = myRole;
+        const newBoardStr = board.join("");
 
-          const winner = checkWinner(board);
-          const draw = !winner && !board.includes(".");
+        const winner = checkWinner(board);
+        const draw = !winner && !board.includes(".");
 
-          if (winner || draw) {
-            g.status = "finished";
-          } else {
-            g.turn = myRole === "X" ? "O" : "X";
-          }
+        let updates = {
+          board: newBoardStr
+        };
 
-          return g;
-        }, undefined, false);
-
-        if (!result.committed) {
-          setMessage("Zug nicht möglich. Bitte aktualisiere das Spiel.");
+        if (winner || draw) {
+          updates.status = "finished";
+        } else {
+          updates.turn = myRole === "X" ? "O" : "X";
         }
+
+        await roomRef.update(updates);
       } catch (error) {
         console.error(error);
         setMessage("Spielzug fehlgeschlagen: " + error.message);
       } finally {
         busy = false;
-        render();
       }
     }
 
     async function resetGame() {
       if (!currentRoom || !user || busy) return;
       busy = true;
-      render();
 
       try {
         const roomRef = db.ref("games/" + currentRoom);
+        const snapshot = await roomRef.once("value");
+        const g = snapshot.val();
 
-        const result = await roomRef.transaction(g => {
-          if (!g) return;
-          if (g.x !== user.uid && g.o !== user.uid) return;
+        if (!g) return;
 
-          g.board = ".........";
-          g.turn = "X";
-          g.status = g.o ? "playing" : "waiting";
-          return g;
-        }, undefined, false);
-
-        if (!result.committed) {
-          setMessage("Neustart fehlgeschlagen.");
-        }
+        await roomRef.update({
+          board: ".........",
+          turn: "X",
+          status: g.o ? "playing" : "waiting"
+        });
       } catch (error) {
         console.error(error);
         setMessage("Neustart fehlgeschlagen: " + error.message);
       } finally {
         busy = false;
-        render();
       }
     }
 
