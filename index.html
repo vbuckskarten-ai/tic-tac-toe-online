@@ -292,6 +292,35 @@
       history.replaceState(null, "", location.pathname);
     }
 
+    async function leaveRoom() {
+      if (currentRoom && user) {
+        try {
+          const roomRef = db.ref("games/" + currentRoom);
+          const snapshot = await roomRef.once("value");
+          const g = snapshot.val();
+
+          if (g) {
+            let updates = {};
+            if (g.x === user.uid) updates.x = "";
+            if (g.o === user.uid) updates.o = "";
+
+            const remainingX = (g.x === user.uid) ? "" : g.x;
+            const remainingO = (g.o === user.uid) ? "" : g.o;
+
+            if (!remainingX && !remainingO) {
+              await roomRef.remove();
+            } else {
+              updates.status = "waiting";
+              await roomRef.update(updates);
+            }
+          }
+        } catch (error) {
+          console.error("Fehler beim Verlassen:", error);
+        }
+      }
+      showLobby();
+    }
+
     function checkWinner(board) {
       for (const line of winningLines) {
         const [a,b,c] = line;
@@ -596,7 +625,7 @@
     });
     $("shareBtn").addEventListener("click", shareRoom);
     $("resetBtn").addEventListener("click", resetGame);
-    $("leaveBtn").addEventListener("click", showLobby);
+    $("leaveBtn").addEventListener("click", leaveRoom);
 
     start();
   </script>
